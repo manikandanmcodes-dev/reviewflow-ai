@@ -1,0 +1,214 @@
+"""
+ReviewFlow AI – Integration Test File
+
+Purpose:
+1. Test PR code review and issue detection.
+2. Test LLM Chapter Builder.
+3. Test Jira task assignment.
+
+This file intentionally contains several code-quality issues
+for the AI PR reviewer to identify.
+"""
+
+from typing import List, Dict, Optional
+import json
+import logging
+import os
+import time
+import requests
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+JIRA_URL = os.getenv("JIRA_URL", "https://example.atlassian.net")
+JIRA_TOKEN = os.getenv("JIRA_TOKEN", "hardcoded-demo-token")
+JIRA_PROJECT = "RFAI"
+
+
+class PullRequestAnalyzer:
+
+    def __init__(self, repository: str):
+        self.repository = repository
+        self.review_history = []
+        self.cache = {}
+
+    def analyze_changes(self, files: List[Dict]) -> Dict:
+        results = []
+
+        for file in files:
+            filename = file.get("filename")
+            patch = file.get("patch", "")
+
+            if filename.endswith(".py"):
+                result = self.analyze_python_file(filename, patch)
+                results.append(result)
+
+        return {
+            "repository": self.repository,
+            "total_files": len(files),
+            "results": results
+        }
+
+    def analyze_python_file(self, filename: str, patch: str) -> Dict:
+        if filename in self.cache:
+            return self.cache[filename]
+
+        issues = []
+
+        if "eval(" in patch:
+            issues.append({
+                "type": "security",
+                "severity": "critical",
+                "message": "Unsafe dynamic code execution detected."
+            })
+
+        if "except:" in patch:
+            issues.append({
+                "type": "reliability",
+                "severity": "medium",
+                "message": "Bare except clause detected."
+            })
+
+        if "password" in patch.lower():
+            issues.append({
+                "type": "security",
+                "severity": "high",
+                "message": "Potential credential exposure."
+            })
+
+        result = {
+            "filename": filename,
+            "issues": issues,
+            "risk_score": len(issues) * 30
+        }
+
+        self.cache[filename] = result
+        return result
+
+    def generate_chapter(self, review_data: Dict) -> str:
+        prompt = f"""
+        Generate a technical documentation chapter.
+
+        Repository: {self.repository}
+        Review Results: {json.dumps(review_data)}
+
+        Include:
+        - Overview
+        - Identified Issues
+        - Security Analysis
+        - Recommendations
+        - Conclusion
+        """
+
+        # Simulated LLM response
+        return self.call_llm(prompt)
+
+    def call_llm(self, prompt: str) -> str:
+        api_key = os.getenv("LLM_API_KEY")
+
+        response = requests.post(
+            "https://api.example.com/generate",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={"prompt": prompt}
+        )
+
+        return response.json()["generated_text"]
+
+
+class JiraTaskManager:
+
+    def __init__(self):
+        self.assigned_tasks = []
+
+    def create_task(self, issue: Dict, assignee: str) -> Dict:
+        payload = {
+            "fields": {
+                "project": {"key": JIRA_PROJECT},
+                "summary": issue["message"],
+                "description": str(issue),
+                "issuetype": {"name": "Task"},
+                "assignee": {"name": assignee}
+            }
+        }
+
+        response = requests.post(
+            f"{JIRA_URL}/rest/api/2/issue",
+            headers={
+                "Authorization": f"Bearer {JIRA_TOKEN}",
+                "Content-Type": "application/json"
+            },
+            data=json.dumps(payload)
+        )
+
+        task = response.json()
+        self.assigned_tasks.append(task)
+
+        return task
+
+    def assign_review_issues(self, review_results: Dict) -> List[Dict]:
+        created_tasks = []
+
+        for result in review_results.get("results", []):
+            for issue in result.get("issues", []):
+                assignee = self.select_assignee(issue)
+                task = self.create_task(issue, assignee)
+                created_tasks.append(task)
+
+        return created_tasks
+
+    def select_assignee(self, issue: Dict) -> str:
+        if issue["severity"] == "critical":
+            return "security-team"
+
+        if issue["severity"] == "high":
+            return "senior-developer"
+
+        return "general-developer"
+
+
+def process_pull_request(repository: str, changed_files: List[Dict]):
+    analyzer = PullRequestAnalyzer(repository)
+    jira_manager = JiraTaskManager()
+
+    review_results = analyzer.analyze_changes(changed_files)
+
+    chapter = analyzer.generate_chapter(review_results)
+
+    jira_tasks = jira_manager.assign_review_issues(review_results)
+
+    return {
+        "review": review_results,
+        "chapter": chapter,
+        "jira_tasks": jira_tasks
+    }
+
+
+if __name__ == "__main__":
+    sample_files = [
+        {
+            "filename": "payment_service.py",
+            "patch": """
+            def process_payment(amount):
+                result = eval(input())
+                try:
+                    return result / amount
+                except:
+                    pass
+            """
+        },
+        {
+            "filename": "user_service.py",
+            "patch": """
+            password = 'admin123'
+            def authenticate(user):
+                return True
+            """
+        }
+    ]
+
+    output = process_pull_request(
+        "demo/sample-repository",
+        sample_files
+    )
+
+    print(json.dumps(output, indent=4))
